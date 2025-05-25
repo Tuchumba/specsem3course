@@ -6,8 +6,8 @@
 
 ### 1. Клонирование и сборка  
 ```bash  
-git clone https://github.com/LenaS-exp/networkisp.git  
-cd networkisp 
+git clone https://github.com/Tuchumba/specsem3course.git 
+cd specsem3course 
 make all  # Собирает master_integral и worker_integral  
 ```  
 
@@ -15,11 +15,11 @@ make all  # Собирает master_integral и worker_integral
 #### На одном компьютере (тестовый режим):  
 - **В терминале 1** (Управляющий узел - Мастер):  
   ```bash  
-  ./bin/master_integral 8080 2 20 0 1  # Порт, количество рабочих, таймаут(сек), a, b (отрезок интегрирования) 
+  ./bin/master_integral 8080 2 200 0 1  # Порт, количество рабочих, таймаут(сек), a, b (отрезок интегрирования) 
   ```  
 - **В терминале 2 и 3** (Рабочие узлы - Воркеры):  
   ```bash  
-  ./bin/worker_integral 127.0.0.1 8080 2  # IP мастера, порт, количество ядер
+  ./bin/worker_integral 127.0.0.1 8080 2 1000 # IP мастера, порт, количество ядер, таймаут(сек)
   ```  
  
 
@@ -32,7 +32,7 @@ make all  # Собирает master_integral и worker_integral
 
 ## ⚙️ Параметры  
 - `master_integral`: `<порт> <кол-во_воркеров> <таймаут> <a> <b>`  
-- `worker_integral`: `<IP_мастера> <порт> <кол-во_ядер>`  
+- `worker_integral`: `<IP_мастера> <порт> <кол-во_ядер> <таймаут>`  
 
 
 Тестовый пример: ∫x²dx (можно заменить в `worker_integral.c`).  
