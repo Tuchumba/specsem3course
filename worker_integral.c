@@ -15,8 +15,6 @@ typedef struct {
     int max_cores;
     int active_threads;
     pthread_mutex_t lock;
-    time_t start_time;
-    int timeout;
     int max_timeout;
 } WorkerConfig;
 
@@ -66,16 +64,9 @@ void* compute_task(void* arg) {
     return NULL;
 }
 
-int check_timeout() {
-    time_t now = time(NULL);
-    return (now - worker_config.start_time) > worker_config.max_timeout;
-}
-
 void worker_init(int max_cores, int max_timeout) {
-    worker_config.start_time = time(NULL);
     worker_config.max_cores = max_cores;
     worker_config.active_threads = 0;
-    worker_config.timeout = 0;
     worker_config.max_timeout = max_timeout;
     pthread_mutex_init(&worker_config.lock, NULL);
 }
@@ -176,6 +167,10 @@ int main(int argc, char** argv) {
     }
 
     worker_init(atoi(argv[3]), atoi(argv[4]));
+
+    alarm(worker_config.max_timeout);
+
+
     int client_fd = connect_to_master(argv[1], atoi(argv[2]));
     printf("Connected to master at %s:%d (max_cores=%d)\n", 
            argv[1], atoi(argv[2]), atoi(argv[3]));

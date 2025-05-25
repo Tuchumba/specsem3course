@@ -33,7 +33,7 @@ typedef struct {
     double total_result;   // Суммарный результат
     int tasks_completed;   // Число завершенных задач
     time_t start_time;
-    int time_out;
+    int err;
 } MasterNode;
 
 MasterNode master;
@@ -41,7 +41,7 @@ struct timespec program_start, program_end;
 
 void master_init(int max_workers, int max_timeout) {
     master.start_time = time(NULL);
-    master.time_out = 0;
+    master.err = 0;
     master.cores_total = 0;
     master.max_workers = max_workers;
     master.max_timeout = max_timeout;
@@ -139,7 +139,7 @@ void run_master(int port, double a, double b) {
     while (master.num_workers < master.max_workers) {
         if (check_master_timeout()) {
             printf("[Master] Master timeout reached!\n");
-            master.time_out = 1;
+            master.err = 1;
             send_shutdown_to_all();
             break;
         }
@@ -171,7 +171,7 @@ void run_master(int port, double a, double b) {
     for (int i = 0; (i < master.max_workers); i++) {
         if (check_master_timeout()) {
             printf("[Master] Master timeout reached!\n");
-            master.time_out = 1;
+            master.err = 1;
             send_shutdown_to_all();
             break;
         }
@@ -183,7 +183,7 @@ void run_master(int port, double a, double b) {
     while (configs_recieved < master.max_workers) {
         if (check_master_timeout()) {
             printf("[Master] Master timeout reached!\n");
-            master.time_out = 1;
+            master.err = 1;
             send_shutdown_to_all();
             break;
         }
@@ -204,7 +204,7 @@ void run_master(int port, double a, double b) {
                     master.fds[i] = master.fds[nfds-1];
                     nfds--;
                     i--;
-                    continue;
+                    break;
                 }
 
                 buffer[len] = '\0';
@@ -236,7 +236,7 @@ void run_master(int port, double a, double b) {
     for (int i = 0; (i < master.max_workers); i++) {
         if (check_master_timeout()) {
             printf("[Master] Master timeout reached!\n");
-            master.time_out = 1;
+            master.err = 1;
             send_shutdown_to_all();
             break;
         }
@@ -259,7 +259,7 @@ void run_master(int port, double a, double b) {
     while (master.tasks_completed < master.cores_total) {
         if (check_master_timeout()) {
             printf("[Master] Master timeout reached!\n");
-            master.time_out = 1;
+            master.err = 1;
             send_shutdown_to_all();
             break;
         }
@@ -280,7 +280,8 @@ void run_master(int port, double a, double b) {
                     master.fds[i] = master.fds[nfds-1];
                     nfds--;
                     i--;
-                    continue;
+                    master.err = 1;
+                    break;
                 }
                 buffer[len] = '\0';
                 for(char* msg = strtok(buffer, " \n"); msg != NULL; msg = strtok(NULL, " \n")) {
@@ -296,7 +297,7 @@ void run_master(int port, double a, double b) {
             }
         }
     }
-    if (!master.time_out) {
+    if (!master.err) {
         printf("\n[Master] Final result: ∫f(x)dx from %.2f to %.2f = %.6f\n", a, b, master.total_result);
         clock_gettime(CLOCK_MONOTONIC, &program_end);
         double total_time = (program_end.tv_sec - program_start.tv_sec) + 
