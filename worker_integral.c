@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -14,6 +15,9 @@ typedef struct {
     int max_cores;
     int active_threads;
     pthread_mutex_t lock;
+    time_t start_time;
+    int timeout;
+    int max_timeout;
 } WorkerConfig;
 
 typedef struct {
@@ -34,7 +38,6 @@ double numerical_integrate(double a, double b) {
         double y = x * x; // Интегрируем x^2
         sum += y * h;
     }
-    
     return sum;
 }
 
@@ -47,7 +50,7 @@ void* compute_task(void* arg) {
         free(task);
         return NULL;
     }
-
+    printf("DEBUG: a = %f; b = %f\n", a, b);
     double result = numerical_integrate(a, b);
 
     char response[128];
@@ -57,13 +60,23 @@ void* compute_task(void* arg) {
     free(task);
     pthread_mutex_lock(&worker_config.lock);
     worker_config.active_threads--;
-    pthread_mutex_unlock(&worker_config.lock);
+    if(!pthread_mutex_unlock(&worker_config.lock)) {
+        printf("Mutex unlocked!\n");
+    }
     return NULL;
 }
 
-void worker_init(int max_cores) {
+int check_timeout() {
+    time_t now = time(NULL);
+    return (now - worker_config.start_time) > worker_config.max_timeout;
+}
+
+void worker_init(int max_cores, int max_timeout) {
+    worker_config.start_time = time(NULL);
     worker_config.max_cores = max_cores;
     worker_config.active_threads = 0;
+    worker_config.timeout = 0;
+    worker_config.max_timeout = max_timeout;
     pthread_mutex_init(&worker_config.lock, NULL);
 }
 
@@ -89,69 +102,81 @@ int connect_to_master(const char* ip, int port) {
 }
 
 void handle_client(int client_fd) {
-    char buffer[BUFFER_SIZE];
-    int len = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    if (len <= 0) {
-        close(client_fd);
-        return;
-    }
-    buffer[len] = '\0';
-
-    if (strncmp(buffer, "TASK ", 5) == 0) {
-        char* task_id = strtok(buffer + 5, " ");
-        char* data = strtok(NULL, "\n");
-
-        if (!task_id || !data) {
-            fprintf(stderr, "Invalid task format\n");
+    while (1) {
+        char buffer[BUFFER_SIZE];
+        int len = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+        printf("%s\n", buffer);
+        if (len <= 0) {
+            close(client_fd);
             return;
         }
+        buffer[len] = '\0';
 
-        pthread_mutex_lock(&worker_config.lock);
-        if (worker_config.active_threads >= worker_config.max_cores) {
+        if (strncmp(buffer, "CONFIG", 6) == 0) {
+            char response[128];
+            snprintf(response, sizeof(response), "CORES %d\n", worker_config.max_cores);
+            send(client_fd, response, strlen(response), 0);
+            continue;
+        }
+        
+        if (strncmp(buffer, "TASK ", 5) == 0) {
+            char* task_id = strtok(buffer + 5, " ");
+            printf("%s\n", task_id);
+            char* data = strtok(NULL, "\n");
+
+            if (!task_id || !data) {
+                fprintf(stderr, "Invalid task format\n");
+                continue;
+            }
+
+            pthread_mutex_lock(&worker_config.lock);
+            if (worker_config.active_threads >= MAX_THREADS) {
+                pthread_mutex_unlock(&worker_config.lock);
+                fprintf(stderr, "Thread limit reached (%d)\n", worker_config.max_cores);
+                continue;
+            }
+            worker_config.active_threads++;
             pthread_mutex_unlock(&worker_config.lock);
-            fprintf(stderr, "Thread limit reached (%d)\n", worker_config.max_cores);
-            return;
+
+            Task* task = malloc(sizeof(Task));
+            strncpy(task->task_id, task_id, sizeof(task->task_id) - 1);
+            strncpy(task->data, data, sizeof(task->data) - 1);
+            task->client_fd = client_fd;
+            
+            pthread_t thread;
+            pthread_create(&thread, NULL, compute_task, task);
+            pthread_detach(thread);    
         }
-        worker_config.active_threads++;
-        pthread_mutex_unlock(&worker_config.lock);
 
-        Task* task = malloc(sizeof(Task));
-        strncpy(task->task_id, task_id, sizeof(task->task_id) - 1);
-        strncpy(task->data, data, sizeof(task->data) - 1);
-        task->client_fd = client_fd;
+        if (strncmp(buffer, "SHUTDOWN", 8) == 0) {
+            printf("[Worker] Received shutdown command. Exiting.\n");
+            close(client_fd);
+            break;
+        }
 
-        pthread_t thread;
-        pthread_create(&thread, NULL, compute_task, task);
-        pthread_detach(thread);
+        // Проверка, жив ли master (если соединение разорвано)
+        char tmp;
+        if (recv(client_fd, &tmp, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
+            printf("[Worker] Master disconnected. Exiting.\n");
+            close(client_fd);
+            break;
+        }
     }
-    if (strncmp(buffer, "SHUTDOWN", 8) == 0) {
-    printf("[Worker] Received shutdown command. Exiting.\n");
-    close(client_fd);
-    exit(0);
-}
+    
 }
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <master_ip> <master_port> <max_cores>\n", argv[0]);
+    if (argc != 5) {
+        fprintf(stderr, "Usage: %s <master_ip> <master_port> <max_cores> <max_timeout>\n", argv[0]);
         return 1;
     }
 
-    worker_init(atoi(argv[3]));
+    worker_init(atoi(argv[3]), atoi(argv[4]));
     int client_fd = connect_to_master(argv[1], atoi(argv[2]));
     printf("Connected to master at %s:%d (max_cores=%d)\n", 
            argv[1], atoi(argv[2]), atoi(argv[3]));
-
-    while (1) {
+    
     handle_client(client_fd);
-    // Проверка, жив ли master (если соединение разорвано)
-    char tmp;
-    if (recv(client_fd, &tmp, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
-        printf("[Worker] Master disconnected. Exiting.\n");
-        close(client_fd);
-        exit(0);
-    }
-}
 
     return 0;
 }

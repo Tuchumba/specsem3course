@@ -16,7 +16,8 @@
 
 typedef struct {
     int fd;
-    int busy;
+    int active_tasks;
+    int max_cores;
     char task_id[32];
     time_t task_start_time;
     double partial_result;  // Для хранения частичного результата
@@ -26,17 +27,23 @@ typedef struct {
 typedef struct {
     Worker workers[MAX_WORKERS];
     int num_workers;
+    int cores_total;
     int max_workers;
     int max_timeout;
     struct pollfd fds[MAX_WORKERS + 1];
     double total_result;   // Суммарный результат
     int tasks_completed;   // Число завершенных задач
+    time_t start_time;
+    int time_out;
 } MasterNode;
 
 MasterNode master;
 struct timespec program_start, program_end;
 
 void master_init(int max_workers, int max_timeout) {
+    master.start_time = time(NULL);
+    master.time_out = 0;
+    master.cores_total = 0;
     master.max_workers = max_workers;
     master.max_timeout = max_timeout;
     master.num_workers = 0;
@@ -50,11 +57,32 @@ void send_task(int worker_idx, const char* task_id, const char* task_data) {
     char buffer[BUFFER_SIZE];
     snprintf(buffer, sizeof(buffer), "TASK %s %s %d\n", task_id, task_data, TASK_TIMEOUT);
     send(worker->fd, buffer, strlen(buffer), 0);
-    worker->busy = 1;
+    worker->active_tasks++;
     worker->result_received = 0;
     strncpy(worker->task_id, task_id, sizeof(worker->task_id) - 1);
     worker->task_start_time = time(NULL);
     printf("[Master] Sent task %s to worker %d\n", task_id, worker_idx);
+}
+
+void request_config(int worker_idx) {
+    Worker* worker = &master.workers[worker_idx];
+    char buffer[BUFFER_SIZE];
+    snprintf(buffer, sizeof(buffer), "CONFIG\n");
+    send(worker->fd, buffer, strlen(buffer), 0);
+    printf("[Master] Sent config request to worker %d\n", worker_idx);
+}
+
+int check_master_timeout() {
+    time_t now = time(NULL);
+    return (now - master.start_time) > master.max_timeout;
+}
+
+void send_shutdown_to_all() {
+    printf("[Master] Sending shutdown to all workers\n");
+    for (int i = 0; i < master.num_workers; i++) {
+        send(master.workers[i].fd, "SHUTDOWN\n", 9, 0);
+        close(master.workers[i].fd);
+    }
 }
 
 void handle_result(int worker_idx, const char* result_str) {
@@ -69,24 +97,13 @@ void handle_result(int worker_idx, const char* result_str) {
     } else {
         fprintf(stderr, "[Master] Invalid result format from worker %d\n", worker_idx);
     }
-    worker->busy = 0;
-    if (master.tasks_completed >= master.max_workers) {
+    worker->active_tasks--;
+    if (master.tasks_completed >= master.cores_total) {
     printf("[Master] All tasks completed. Shutting down workers...\n");
-    for (int i = 0; i < master.num_workers; i++) {
-        send(master.workers[i].fd, "SHUTDOWN\n", 9, 0);
-    }
-}
-}
-
-void check_timeouts() {
-    time_t now = time(NULL);
-    for (int i = 0; i < master.num_workers; i++) {
-        if (master.workers[i].busy && !master.workers[i].result_received && 
-            (now - master.workers[i].task_start_time) > TASK_TIMEOUT) {
-            printf("[Master] Worker %d timed out on task %s\n", i, master.workers[i].task_id);
-            master.workers[i].busy = 0;
+        for (int i = 0; i < master.num_workers; i++) {
+            send(master.workers[i].fd, "SHUTDOWN\n", 9, 0);
         }
-    }
+    }    
 }
 
 void run_master(int port, double a, double b) {
@@ -121,6 +138,13 @@ void run_master(int port, double a, double b) {
 
     // Ждем подключения всех рабочих узлов
     while (master.num_workers < master.max_workers) {
+        if (check_master_timeout()) {
+            printf("[Master] Master timeout reached!\n");
+            master.time_out = 1;
+            send_shutdown_to_all();
+            break;
+        }
+
         int ready = poll(master.fds, nfds, 1000);
         if (ready < 0) {
             perror("poll");
@@ -144,26 +168,103 @@ void run_master(int port, double a, double b) {
         }
     }
 
+    // Запрос конфигураций
+    for (int i = 0; (i < master.max_workers); i++) {
+        if (check_master_timeout()) {
+            printf("[Master] Master timeout reached!\n");
+            master.time_out = 1;
+            send_shutdown_to_all();
+            break;
+        }
+        request_config(i);
+    }
+    
+    int configs_recieved = 0;
+
+    while (configs_recieved < master.max_workers) {
+        if (check_master_timeout()) {
+            printf("[Master] Master timeout reached!\n");
+            master.time_out = 1;
+            send_shutdown_to_all();
+            break;
+        }
+
+        int ready = poll(master.fds, nfds, 1000);
+        if (ready < 0) {
+            perror("poll");
+            break;
+        }
+        
+        for (int i = 1; i < nfds; i++) {
+            if (master.fds[i].revents & POLLIN) {
+                char buffer[BUFFER_SIZE];
+                int len = recv(master.fds[i].fd, buffer, sizeof(buffer) - 1, 0);
+                if (len <= 0) {
+                    printf("[Master] Worker %d disconnected\n", i-1);
+                    close(master.fds[i].fd);
+                    master.fds[i] = master.fds[nfds-1];
+                    nfds--;
+                    i--;
+                    continue;
+                }
+
+                buffer[len] = '\0';
+                if (strncmp(buffer, "CORES ", 6) == 0) {
+                    int cores = strtol(buffer + 6, NULL, 10);
+                    for (int j = 0; j < master.max_workers; j++){
+                        Worker* current_worker = &master.workers[j];                
+                        if (current_worker->fd == master.fds[i].fd) {
+                            current_worker->max_cores = cores;
+                            master.cores_total += cores;
+                            printf("[Master] Worker %d has %d cores\n", j, cores);
+                        }
+                    }
+                    configs_recieved++;
+                }
+            }
+        }
+    }
+
+
     // Раздаем задачи
     clock_gettime(CLOCK_MONOTONIC, &program_start);
-    
-    double step = (b - a) / master.max_workers;
-    for (int i = 0; i < master.max_workers; i++) {
-        double start = a + i * step;
-        double end = start + step;
-        char task_data[128];
-        snprintf(task_data, sizeof(task_data), "integrate %lf %lf", start, end);
-        
-        char task_id[32];
-        snprintf(task_id, sizeof(task_id), "task%d", i);
-        
-        send_task(i % master.num_workers, task_id, task_data);
+
+    double step = (b - a) / master.cores_total;    
+    double start = a;
+    double end = start + step;
+    int task_number = 0;
+
+    for (int i = 0; (i < master.max_workers); i++) {
+        if (check_master_timeout()) {
+            printf("[Master] Master timeout reached!\n");
+            master.time_out = 1;
+            send_shutdown_to_all();
+            break;
+        }
+        for (int j = 0; j < master.workers[i].max_cores; j++) {
+            char task_data[128];
+            snprintf(task_data, sizeof(task_data), "integrate %lf %lf", start, end);
+            
+            char task_id[32];
+            snprintf(task_id, sizeof(task_id), "task%d", task_number);
+            printf("DEBUG: start = %f; end = %f\n", start, end);
+            send_task(i, task_id, task_data);
+            
+            start += step;
+            end += step;
+            task_number++;
+        }
     }
 
     // Собираем результаты
-    while (master.tasks_completed < master.max_workers) {
-        check_timeouts();
-        
+    while (master.tasks_completed < master.cores_total) {
+        if (check_master_timeout()) {
+            printf("[Master] Master timeout reached!\n");
+            master.time_out = 1;
+            send_shutdown_to_all();
+            break;
+        }
+
         int ready = poll(master.fds, nfds, 1000);
         if (ready < 0) {
             perror("poll");
@@ -194,16 +295,16 @@ void run_master(int port, double a, double b) {
             }
         }
     }
-
-    printf("\n[Master] Final result: ∫f(x)dx from %.2f to %.2f = %.6f\n", a, b, master.total_result);
-     clock_gettime(CLOCK_MONOTONIC, &program_end);
-    double total_time = (program_end.tv_sec - program_start.tv_sec) + 
-                   (program_end.tv_nsec - program_start.tv_nsec) / 1000000000.0;
-    printf("\nTotal program execution time: %.6f seconds\n", total_time);
-printf("[Master] Calculation completed. Shutting down...\n");
+    if (!master.time_out) {
+        printf("\n[Master] Final result: ∫f(x)dx from %.2f to %.2f = %.6f\n", a, b, master.total_result);
+        clock_gettime(CLOCK_MONOTONIC, &program_end);
+        double total_time = (program_end.tv_sec - program_start.tv_sec) + 
+                    (program_end.tv_nsec - program_start.tv_nsec) / 1000000000.0;
+        printf("\nTotal program execution time: %.6f seconds\n", total_time);
+        printf("[Master] Calculation completed. Shutting down...\n");
+    }
 	fflush(stdout);
     close(listen_fd);
-    
 }
 
 int main(int argc, char** argv) {
