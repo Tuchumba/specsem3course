@@ -7,7 +7,6 @@
 #include <sys/time.h>
 #include <poll.h>
 #include <pthread.h>
-#include <errno.h>
 #include <time.h>
 
 #define MAX_WORKERS 10
@@ -283,15 +282,17 @@ void run_master(int port, double a, double b) {
                     i--;
                     continue;
                 }
-
                 buffer[len] = '\0';
-                if (strncmp(buffer, "RESULT ", 7) == 0) {
-                    char* task_id = strtok(buffer + 7, " ");
-                    char* result_str = strtok(NULL, "\n");
-                    if (task_id && result_str) {
-                        handle_result(i - 1, result_str);
+                for(char* msg = strtok(buffer, " \n"); msg != NULL; msg = strtok(NULL, " \n")) {
+                    if (strcmp(buffer, "RESULT") == 0) {
+                        char* task_id = strtok(NULL, " ");
+                        char* result_str = strtok(NULL, "\n");
+                        if (task_id && result_str) {
+                            handle_result(i - 1, result_str);
+                        }
                     }
                 }
+                
             }
         }
     }
