@@ -1,7 +1,16 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -lpthread
+CCG = gcc
+CC = clang
+CFLAGS = -Wall -Wextra -pthread
+SCAN_BUILD = scan-build
+SCAN_VIEW = scan-view
 BIN_DIR = bin
 TERMINAL = xterm -e
+A = 0
+B = 1
+P = 6
+PORT = 8080
+TIMEOUT = 10
+TESTS_DIR = tests
 
 all: dirs master_integral worker_integral
 
@@ -14,25 +23,26 @@ master_integral: master_integral.c
 worker_integral: worker_integral.c
 	@$(CC) $(CFLAGS) $< -o $(BIN_DIR)/$@
 
+analyze:
+	$(SCAN_BUILD) --use-cc=$(CC) make clean all
+
+# Просмотр результатов анализа
+view:
+	$(SCAN_VIEW) $(shell find . -name "scan-build-*" | sort | tail -n1)
+
 run: all
 	@echo "Starting master and workers in separate terminals..."
-	@$(TERMINAL) "$(BIN_DIR)/master_integral $(PORT) $(WORKERS) $(A) $(B)" & \
-	sleep 0.5 && \
-	$(TERMINAL) "$(BIN_DIR)/worker_integral 127.0.0.1 $(PORT) 2" & \
-	$(TERMINAL) "$(BIN_DIR)/worker_integral 127.0.0.1 $(PORT) 2" & \
-	$(TERMINAL) "$(BIN_DIR)/worker_integral 127.0.0.1 $(PORT) 2" &
+	@xterm -hold -e "./bin/master_integral $(PORT) 2 $(TIMEOUT) $(A) $(B)" &
+	@sleep 1
+	@xterm -hold -e "./bin/worker_integral 127.0.0.1 $(PORT) $(P) $(TIMEOUT)" &
+	@xterm -hold -e "./bin/worker_integral 127.0.0.1 $(PORT) $(P) $(TIMEOUT)" &
+	@sleep $(TIMEOUT)
 
-time_run: all
-	@echo "Starting with time measurement..."
-	@time ( \
-		$(TERMINAL) "$(BIN_DIR)/master_integral $(PORT) $(WORKERS) $(A) $(B)" & \
-		sleep 0.5 && \
-		$(TERMINAL) "$(BIN_DIR)/worker_integral 127.0.0.1 $(PORT) 2" & \
-		$(TERMINAL) "$(BIN_DIR)/worker_integral 127.0.0.1 $(PORT) 2" & \
-		$(TERMINAL) "$(BIN_DIR)/worker_integral 127.0.0.1 $(PORT) 2" & \
-		wait \
-	)
-
+test: all
+	@echo "Running test scenarios..."
+	@chmod +x $(TESTS_DIR)/run_tests.sh
+	@$(TESTS_DIR)/run_tests.sh
+	
 clean:
 	@rm -rf $(BIN_DIR)
 
