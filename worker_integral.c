@@ -9,7 +9,6 @@
 
 #define MAX_THREADS 32
 #define BUFFER_SIZE 1024
-#define NUM_STEPS 1000000000
 
 typedef struct {
     int max_cores;
@@ -26,11 +25,11 @@ typedef struct {
 
 WorkerConfig worker_config;
 
-double numerical_integrate(double a, double b, int num_steps) {
+double numerical_integrate(double a, double b, size_t num_steps) {
     double h = (b - a) / num_steps;
     double sum = 0.0;
     
-    for (int i = 0; i < num_steps; i++) {
+    for (size_t i = 0; i < num_steps; i++) {
         double x = a + (i + 0.5) * h;
         if ( a < 0 ) {
             fprintf(stderr, "[Worker] Critical error: division by zero\n");
@@ -44,15 +43,18 @@ double numerical_integrate(double a, double b, int num_steps) {
 }
 
 void* compute_task(void* arg) {
+    time_t task_start_time = time(NULL);
     Task* task = (Task*)arg;
     double a, b;
+    size_t num_steps;
     
-    if (sscanf(task->data, "integrate %lf %lf", &a, &b) != 2) {
+    if (sscanf(task->data, "integrate %lf %lf %lu", &a, &b, &num_steps) != 3) {
         fprintf(stderr, "Invalid task format\n");
         free(task);
         return NULL;
     }
-    double result = numerical_integrate(a, b, NUM_STEPS / worker_config.max_cores);
+
+    double result = numerical_integrate(a, b, num_steps);
     
     if (result == -1) { 
         send(task->client_fd, "ERROR\n", 6, 0);
@@ -61,6 +63,9 @@ void* compute_task(void* arg) {
         snprintf(response, sizeof(response), "RESULT %s %.6f\n", task->task_id, result);
         send(task->client_fd, response, strlen(response), 0);
     }
+
+    double total_task_time = time(NULL) - task_start_time;
+    printf("\nDEBUG: task %s execution time: %.6f seconds\n", task->task_id, total_task_time);
 
     free(task);
     pthread_mutex_lock(&worker_config.lock);

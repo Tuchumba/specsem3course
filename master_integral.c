@@ -12,6 +12,7 @@
 #define MAX_WORKERS 10
 #define BUFFER_SIZE 1024
 #define TASK_TIMEOUT 5
+#define NUM_STEPS 10000000000
 
 typedef struct {
     int fd;
@@ -232,6 +233,7 @@ void run_master(int port, double a, double b) {
     double start = a;
     double end = start + step;
     int task_number = 0;
+    size_t worker_steps = NUM_STEPS / master.cores_total;
 
     for (int i = 0; (i < master.max_workers); i++) {
         if (check_master_timeout()) {
@@ -242,7 +244,7 @@ void run_master(int port, double a, double b) {
         }
         for (int j = 0; j < master.workers[i].max_cores; j++) {
             char task_data[128];
-            snprintf(task_data, sizeof(task_data), "integrate %lf %lf", start, end);
+            snprintf(task_data, sizeof(task_data), "integrate %lf %lf %lu", start, end, worker_steps);
             
             char task_id[32];
             snprintf(task_id, sizeof(task_id), "task%d", task_number);
