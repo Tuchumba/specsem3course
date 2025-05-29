@@ -166,7 +166,7 @@ void handle_client(int client_fd) {
             if (strcmp(msg, "SHUTDOWN") == 0) {
                 printf("[Worker] Received shutdown command. Exiting.\n");
                 close(client_fd);
-                break;
+                exit(0);
             }
         }
     
@@ -174,7 +174,7 @@ void handle_client(int client_fd) {
         if (recv(client_fd, &tmp, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
             printf("[Worker] Master disconnected. Exiting.\n");
             close(client_fd);
-            break;
+            exit(0);
         }
     }
     

@@ -8,7 +8,7 @@
 ```bash  
 git clone https://github.com/Tuchumba/specsem3course.git
 cd specsem3course 
-make all  # Собирает master_integral и worker_integral  
+make all CC=<gcc/clang>  # Собирает master_integral и worker_integral (указание компилятора опционально)
 ```  
 
 ### 2. Запуск  

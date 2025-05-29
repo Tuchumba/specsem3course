@@ -9,7 +9,7 @@ A = 0
 B = 1
 P = 6
 PORT = 8080
-TIMEOUT = 10
+TIMEOUT = 10000
 TESTS_DIR = tests
 
 all: dirs master_integral worker_integral
@@ -22,13 +22,6 @@ master_integral: master_integral.c
 
 worker_integral: worker_integral.c
 	@$(CC) $(CFLAGS) $< -o $(BIN_DIR)/$@
-
-analyze:
-	$(SCAN_BUILD) --use-cc=$(CC) make clean all
-
-# Просмотр результатов анализа
-view:
-	$(SCAN_VIEW) $(shell find . -name "scan-build-*" | sort | tail -n1)
 
 run: all
 	@echo "Starting master and workers in separate terminals..."
