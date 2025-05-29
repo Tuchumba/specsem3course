@@ -8,6 +8,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <time.h>
+#include <netinet/tcp.h>
 
 #define MAX_WORKERS 10
 #define BUFFER_SIZE 1024
@@ -134,6 +135,17 @@ void run_master(int port, double a, double b) {
         exit(1);
     }
 
+    int enable = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_KEEPALIVE, &enable, sizeof(enable));
+
+    int idle = 2;     // Начать проверки через 2 секунды бездействия
+    int interval = 1; // Интервал проверок: 1 секунда
+    int count = 3;    // Количество проверок перед разрывом
+
+    setsockopt(listen_fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(listen_fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(listen_fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+
     master.fds[0].fd = listen_fd;
     master.fds[0].events = POLLIN;
     int nfds = 1;
@@ -151,6 +163,8 @@ void run_master(int port, double a, double b) {
         int ready = poll(master.fds, nfds, 1000);
         if (ready < 0) {
             perror("poll");
+            master.err = 1;
+            send_shutdown_to_all();
             break;
         }
 
@@ -176,7 +190,8 @@ void run_master(int port, double a, double b) {
             printf("[Master] Master timeout reached!\n");
             master.err = 1;
             send_shutdown_to_all();
-            break;
+            close(listen_fd);
+            exit(1);
         }
         request_config(i);
     }
@@ -188,13 +203,17 @@ void run_master(int port, double a, double b) {
             printf("[Master] Master timeout reached!\n");
             master.err = 1;
             send_shutdown_to_all();
-            break;
+            close(listen_fd);
+            exit(1);
         }
 
         int ready = poll(master.fds, nfds, 1000);
         if (ready < 0) {
             perror("poll");
-            break;
+            master.err = 1;
+            send_shutdown_to_all();
+            close(listen_fd);
+            exit(1);
         }
         
         for (int i = 1; i < nfds; i++) {
@@ -207,7 +226,10 @@ void run_master(int port, double a, double b) {
                     master.fds[i] = master.fds[nfds-1];
                     nfds--;
                     i--;
-                    break;
+                    master.err = 1;
+                    send_shutdown_to_all();
+                    close(listen_fd);
+                    exit(1);
                 }
 
                 buffer[len] = '\0';
@@ -240,7 +262,8 @@ void run_master(int port, double a, double b) {
             printf("[Master] Master timeout reached!\n");
             master.err = 1;
             send_shutdown_to_all();
-            break;
+            close(listen_fd);
+            exit(1);
         }
         for (int j = 0; j < master.workers[i].max_cores; j++) {
             char task_data[128];
@@ -261,13 +284,17 @@ void run_master(int port, double a, double b) {
             printf("[Master] Master timeout reached!\n");
             master.err = 1;
             send_shutdown_to_all();
-            break;
+            close(listen_fd);
+            exit(1);
         }
 
         int ready = poll(master.fds, nfds, 1000);
         if (ready < 0) {
             perror("poll");
-            break;
+            master.err = 1;
+            send_shutdown_to_all();
+            close(listen_fd);
+            exit(1);
         }
 
         for (int i = 1; i < nfds; i++) {
@@ -281,7 +308,9 @@ void run_master(int port, double a, double b) {
                     nfds--;
                     i--;
                     master.err = 1;
-                    break;
+                    send_shutdown_to_all();
+                    close(listen_fd);
+                    exit(1);
                 }
                 buffer[len] = '\0';
                 for(char* msg = strtok(buffer, " \n"); msg != NULL; msg = strtok(NULL, " \n")) {

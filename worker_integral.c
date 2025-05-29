@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <pthread.h>
+#include <netinet/tcp.h>
 
 #define MAX_THREADS 32
 #define BUFFER_SIZE 1024
@@ -93,6 +94,17 @@ int connect_to_master(const char* ip, int port) {
     addr.sin_port = htons(port);
     inet_pton(AF_INET, ip, &addr.sin_addr);
 
+    int enable = 1;
+    setsockopt(client_fd, SOL_SOCKET, SO_KEEPALIVE, &enable, sizeof(enable));
+
+    int idle = 2;     // Начать проверки через 2 секунды бездействия
+    int interval = 1; // Интервал проверок: 1 секунда
+    int count = 3;    // Количество проверок перед разрывом
+
+    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+
     if (connect(client_fd, (struct sockaddr*)&addr, sizeof(addr))) {
         perror("connect");
         close(client_fd);
@@ -108,6 +120,7 @@ void handle_client(int client_fd) {
         int len = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
         if (len <= 0) {
             close(client_fd);
+            fprintf(stderr, "Connection with master lost\n");
             return;
         }
         buffer[len] = '\0';
